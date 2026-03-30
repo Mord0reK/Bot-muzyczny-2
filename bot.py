@@ -6,6 +6,9 @@ import os
 from dotenv import load_dotenv
 import asyncio
 
+# Ładowanie opus przed zdefiniowaniem intencji
+discord.opus.load_opus("libopus.so.0")
+
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
@@ -58,7 +61,9 @@ class YTDLSource(discord.PCMVolumeTransformer):
             data = data['entries'][0]
             
         filename = data['url'] if stream else ytdl.prepare_filename(data)
-        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+        
+        # Wymuszenie opcji executable='ffmpeg' aby upewnić się że discord py z niego korzysta w dockerze
+        return cls(discord.FFmpegPCMAudio(filename, executable='ffmpeg', **ffmpeg_options), data=data)
 
 def load_stations():
     with open('stations.json', 'r', encoding='utf-8') as f:
@@ -136,10 +141,10 @@ class RadioSelect(discord.ui.Select):
         try:
             # Rozbudowane opcje FFmpeg pod stabilność streamów z radia
             radio_ffmpeg_options = {
-                'options': '-vn -sn -dn -bufsize 5000000',
-                'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -timeout 10000000'
+                'options': '-vn -sn -dn -bufsize 5000k', # Uproszczony zapis bufsize dla ffmpeg
+                'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
             }
-            source = discord.FFmpegPCMAudio(station_url, **radio_ffmpeg_options)
+            source = discord.FFmpegPCMAudio(station_url, executable='ffmpeg', **radio_ffmpeg_options)
             voice_client.play(source, after=lambda e: print(f'Zatrzymano radio: {e}') if e else None)
             await interaction.followup.send(f'📻 Opracowuję i odtwarzam radio: **{station_name}**')
         except Exception as e:
