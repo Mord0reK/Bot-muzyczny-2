@@ -58,53 +58,72 @@ def load_stations():
 
 @bot.event
 async def on_ready():
+    await bot.tree.sync()
+    # Ustawienie statusu (aktywności) na Discordzie
+    activity = discord.Activity(type=discord.ActivityType.listening, name="🎶 Gotowy do grania! | /play")
+    await bot.change_presence(status=discord.Status.online, activity=activity)
     print(f'Zalogowano jako {bot.user}!')
 
-@bot.command(name='join', help='Dołącza do kanału głosowego')
+@bot.hybrid_command(name='join', description='Dołącza do kanału głosowego')
 async def join(ctx):
     if not ctx.message.author.voice:
-        await ctx.send("Musisz najpierw dołączyć do kanału głosowego!")
+        await ctx.send("Musisz najpierw dołączyć do kanału głosowego!", ephemeral=True)
         return
     channel = ctx.message.author.voice.channel
     if ctx.voice_client is not None:
-        return await ctx.voice_client.move_to(channel)
+        await ctx.voice_client.move_to(channel)
+        await ctx.send(f'Przeniesiono na kanał: {channel}', ephemeral=True)
+        return
     await channel.connect()
+    await ctx.send(f'Dołączono do kanału: {channel}', ephemeral=True)
 
-@bot.command(name='play', help='Odtwarza piosenkę (URL YT/Spotify lub nazwa)')
-async def play(ctx, *, query):
-    if ctx.voice_client is None:
-        await ctx.invoke(join)
+@bot.hybrid_command(name='play', description='Odtwarza piosenkę z YT/Spotify lub ze wskazanego linku')
+async def play(ctx, *, query: str):
+    await ctx.defer() # <--- To mówi Discordowi "Czekaj, przetwarzam!" żeby zapobiec błędowi "Aplikacja nie reaguje"
     
-    inform_msg = await ctx.send(f'Szukam i ładuję: **{query}** (może to potrwać chwilę)...')
+    if ctx.voice_client is None:
+        if ctx.message.author.voice:
+            await ctx.message.author.voice.channel.connect()
+        else:
+            await ctx.send("Musisz najpierw dołączyć do kanału głosowego!")
+            return
+            
     try:
-        async with ctx.typing():
-            # yt-dlp automatycznie ogarnie stream z YT
-            player = await YTDLSource.from_url(query, loop=bot.loop, stream=True)
-            ctx.voice_client.play(player, after=lambda e: print(f'Błąd odtwarzania: {e}') if e else None)
-        await inform_msg.edit(content=f'Teraz gram: **{player.title}**')
-    except Exception as e:
-        await inform_msg.edit(content=f'Wystąpił błąd podczas ładowania: {e}')
+        # Odtworzenie lub kolejkowanie (prosta wersja bez pełnej kolejki, nadpisuje obecne audio po zakończeniu)
+        if ctx.voice_client.is_playing():
+            ctx.voice_client.stop()
 
-@bot.command(name='stacje', help='Wyświetla wszystkie dostępne stacje radiowe z pliku')
+        player = await YTDLSource.from_url(query, loop=bot.loop, stream=True)
+        ctx.voice_client.play(player, after=lambda e: print(f'Błąd odtwarzania: {e}') if e else None)
+        await ctx.send(f'▶️ Teraz gram: **{player.title}**')
+    except Exception as e:
+        await ctx.send(f'Wystąpił błąd podczas wyszukiwania i ładowania: {e}')
+
+@bot.hybrid_command(name='stacje', description='Wyświetla wszystkie dostępne stacje radiowe z pliku')
 async def stacje(ctx):
     stations = load_stations()
     msg = "**Wszystkie dostępne stacje radiowe:**\n"
     for idx, (name, _) in enumerate(stations.items(), 1):
         msg += f"• **{name}**\n"
-    msg += "\n*Użyj komendy !radio [nazwa_stacji] aby odtworzyć (np. !radio Open FM - Vixa).* "
+    msg += "\n*Użyj komendy /radio lub !radio [nazwa_stacji] aby odtworzyć (np. !radio Open FM - Vixa).* "
     await ctx.send(msg)
 
-@bot.command(name='radiolist', help='Wyświetla dostępne stacje radiowe z pliku (Alias)')
+@bot.hybrid_command(name='radiolist', description='Wyświetla dostępne stacje radiowe z pliku (Alias)')
 async def radiolist(ctx):
-    await ctx.invoke(stacje)
+    await stacje(ctx)
 
-@bot.command(name='radio', help='Odtwarza wybraną stację radiową')
-async def radio(ctx, *, station_name):
+@bot.hybrid_command(name='radio', description='Odtwarza wybraną stację radiową')
+async def radio(ctx, *, station_name: str):
+    await ctx.defer()
+    
     if ctx.voice_client is None:
-        await ctx.invoke(join)
+        if ctx.message.author.voice:
+            await ctx.message.author.voice.channel.connect()
+        else:
+            await ctx.send("Musisz najpierw dołączyć do kanału głosowego!")
+            return
 
     stations = load_stations()
-    # Szukamy ignorując wielkość liter
     station_url = None
     for name, url in stations.items():
         if name.lower() == station_name.lower():
@@ -112,17 +131,22 @@ async def radio(ctx, *, station_name):
             break
             
     if not station_url:
-        await ctx.send(f'Nie znaleziono stacji: **{station_name}**. Wpisz `!radiolist` aby zobaczyć listę.')
+        await ctx.send(f'Nie znaleziono stacji: **{station_name}**. Wpisz `/stacje` aby zobaczyć listę.')
         return
+
+    if ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
 
     source = discord.FFmpegPCMAudio(station_url, **ffmpeg_options)
     ctx.voice_client.play(source, after=lambda e: print(f'Błąd odtwarzania: {e}') if e else None)
     await ctx.send(f'📻 Odtwarzam radio: **{station_name}**')
 
-@bot.command(name='stop', help='Zatrzymuje bota i rozłącza z kanału')
+@bot.hybrid_command(name='stop', description='Zatrzymuje bota i rozłącza z kanału')
 async def stop(ctx):
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-        await ctx.send("Rozłączono!")
+        await ctx.send("Rozłączono! Do zobaczenia.")
+    else:
+        await ctx.send("Bot nie jest na żadnym kanale.", ephemeral=True)
 
 bot.run(TOKEN)
