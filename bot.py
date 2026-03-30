@@ -82,9 +82,10 @@ async def play(ctx, *, query: str):
     channel = ctx.author.voice.channel
     if ctx.voice_client is None:
         try:
-            await channel.connect(timeout=20.0)
+            # Wymuszenie twardego limitu czasu i użycie szybszego wezwania reconnectu
+            await channel.connect(timeout=10.0, reconnect=True)
         except Exception as e:
-            await ctx.send(f"Nie udało się połączyć: {e}")
+            await ctx.send(f"Nie udało się połączyć na kanał (Błąd bramki {e}): Spróbuj jeszcze raz.")
             return
     elif ctx.voice_client.channel != channel:
         await ctx.voice_client.move_to(channel)
@@ -122,9 +123,9 @@ class RadioSelect(discord.ui.Select):
 
         if voice_client is None:
             try:
-                voice_client = await channel.connect(timeout=20.0)
+                voice_client = await channel.connect(timeout=10.0, reconnect=True)
             except Exception as e:
-                await interaction.followup.send(f"Nie udało się połączyć ze stacją: {e}")
+                await interaction.followup.send(f"Nie udało się połączyć na kanał (Błąd bramki {e}): Spróbuj jeszcze raz.")
                 return
         elif voice_client.channel != channel:
             await voice_client.move_to(channel)
