@@ -64,29 +64,23 @@ async def on_ready():
     await bot.change_presence(status=discord.Status.online, activity=activity)
     print(f'Zalogowano jako {bot.user}!')
 
-@bot.hybrid_command(name='join', description='Dołącza do kanału głosowego')
-async def join(ctx):
-    if not ctx.message.author.voice:
-        await ctx.send("Musisz najpierw dołączyć do kanału głosowego!", ephemeral=True)
-        return
-    channel = ctx.message.author.voice.channel
-    if ctx.voice_client is not None:
-        await ctx.voice_client.move_to(channel)
-        await ctx.send(f'Przeniesiono na kanał: {channel}', ephemeral=True)
-        return
-    await channel.connect()
-    await ctx.send(f'Dołączono do kanału: {channel}', ephemeral=True)
-
 @bot.hybrid_command(name='play', description='Odtwarza piosenkę z YT/Spotify lub ze wskazanego linku')
 async def play(ctx, *, query: str):
-    await ctx.defer() # <--- To mówi Discordowi "Czekaj, przetwarzam!" żeby zapobiec błędowi "Aplikacja nie reaguje"
+    await ctx.defer()
     
+    if not ctx.author.voice:
+        await ctx.send("Musisz najpierw dołączyć do kanału głosowego!")
+        return
+
+    channel = ctx.author.voice.channel
     if ctx.voice_client is None:
-        if ctx.message.author.voice:
-            await ctx.message.author.voice.channel.connect()
-        else:
-            await ctx.send("Musisz najpierw dołączyć do kanału głosowego!")
+        try:
+            await channel.connect(timeout=20.0)
+        except Exception as e:
+            await ctx.send(f"Nie udało się połączyć: {e}")
             return
+    elif ctx.voice_client.channel != channel:
+        await ctx.voice_client.move_to(channel)
             
     try:
         # Odtworzenie lub kolejkowanie (prosta wersja bez pełnej kolejki, nadpisuje obecne audio po zakończeniu)
@@ -116,12 +110,19 @@ async def radiolist(ctx):
 async def radio(ctx, *, station_name: str):
     await ctx.defer()
     
+    if not ctx.author.voice:
+        await ctx.send("Musisz najpierw dołączyć do kanału głosowego!")
+        return
+
+    channel = ctx.author.voice.channel
     if ctx.voice_client is None:
-        if ctx.message.author.voice:
-            await ctx.message.author.voice.channel.connect()
-        else:
-            await ctx.send("Musisz najpierw dołączyć do kanału głosowego!")
+        try:
+            await channel.connect(timeout=20.0)
+        except Exception as e:
+            await ctx.send(f"Nie udało się połączyć (błąd bramki głosowej): {e}")
             return
+    elif ctx.voice_client.channel != channel:
+        await ctx.voice_client.move_to(channel)
 
     stations = load_stations()
     station_url = None
