@@ -10,8 +10,16 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+class MusicBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix='!', intents=intents)
+
+    async def setup_hook(self):
+        # Optymalizacja: Synchronizacja komend tutaj zamiast w on_ready
+        # Zapobiega blokowaniu ("Rate limit") przy drobnych reconnectach
+        await self.tree.sync()
+
+bot = MusicBot()
 
 # Opcje dla yt-dlp, dostosowane pod słaby serwer (audio only, no playlist)
 ytdl_format_options = {
@@ -28,8 +36,8 @@ ytdl_format_options = {
     'source_address': '0.0.0.0'
 }
 ffmpeg_options = {
-    'options': '-vn',
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+    'options': '-vn -sn -dn -bufsize 5000000',
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -timeout 10000000"
 }
 
 ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
@@ -58,7 +66,6 @@ def load_stations():
 
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
     # Ustawienie statusu (aktywności) na Discordzie
     activity = discord.Activity(type=discord.ActivityType.listening, name="🎶 Gotowy do grania! | /play")
     await bot.change_presence(status=discord.Status.online, activity=activity)
@@ -93,54 +100,64 @@ async def play(ctx, *, query: str):
     except Exception as e:
         await ctx.send(f'Wystąpił błąd podczas wyszukiwania i ładowania: {e}')
 
-@bot.hybrid_command(name='stacje', description='Wyświetla wszystkie dostępne stacje radiowe z pliku')
-async def stacje(ctx):
-    stations = load_stations()
-    msg = "**Wszystkie dostępne stacje radiowe:**\n"
-    for idx, (name, _) in enumerate(stations.items(), 1):
-        msg += f"• **{name}**\n"
-    msg += "\n*Użyj komendy /radio lub !radio [nazwa_stacji] aby odtworzyć (np. !radio Open FM - Vixa).* "
-    await ctx.send(msg)
+class RadioSelect(discord.ui.Select):
+    def __init__(self, stations):
+        options = []
+        for name in list(stations.keys())[:25]: # Limit do 25 opcji wg obostrzeń Discorda
+            options.append(discord.SelectOption(label=name, description="Odtwórz tę stację"))
+        super().__init__(placeholder="Wybierz stację radiową z listy...", min_values=1, max_values=1, options=options)
+        self.stations = stations
 
-@bot.hybrid_command(name='radiolist', description='Wyświetla dostępne stacje radiowe z pliku (Alias)')
-async def radiolist(ctx):
-    await stacje(ctx)
-
-@bot.hybrid_command(name='radio', description='Odtwarza wybraną stację radiową')
-async def radio(ctx, *, station_name: str):
-    await ctx.defer()
-    
-    if not ctx.author.voice:
-        await ctx.send("Musisz najpierw dołączyć do kanału głosowego!")
-        return
-
-    channel = ctx.author.voice.channel
-    if ctx.voice_client is None:
-        try:
-            await channel.connect(timeout=20.0)
-        except Exception as e:
-            await ctx.send(f"Nie udało się połączyć (błąd bramki głosowej): {e}")
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        station_name = self.values[0]
+        station_url = self.stations[station_name]
+        
+        if not interaction.user.voice:
+            await interaction.followup.send("Musisz najpierw dołączyć do kanału głosowego!")
             return
-    elif ctx.voice_client.channel != channel:
-        await ctx.voice_client.move_to(channel)
 
+        channel = interaction.user.voice.channel
+        voice_client = interaction.guild.voice_client
+
+        if voice_client is None:
+            try:
+                voice_client = await channel.connect(timeout=20.0)
+            except Exception as e:
+                await interaction.followup.send(f"Nie udało się połączyć ze stacją: {e}")
+                return
+        elif voice_client.channel != channel:
+            await voice_client.move_to(channel)
+
+        if voice_client.is_playing():
+            voice_client.stop()
+
+        try:
+            # Rozbudowane opcje FFmpeg pod stabilność streamów z radia
+            radio_ffmpeg_options = {
+                'options': '-vn -sn -dn -bufsize 5000000',
+                'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -timeout 10000000'
+            }
+            source = discord.FFmpegPCMAudio(station_url, **radio_ffmpeg_options)
+            voice_client.play(source, after=lambda e: print(f'Zatrzymano radio: {e}') if e else None)
+            await interaction.followup.send(f'📻 Opracowuję i odtwarzam radio: **{station_name}**')
+        except Exception as e:
+            await interaction.followup.send(f'Wystąpił twardy błąd odtwarzania streamu: {e}')
+
+class RadioView(discord.ui.View):
+    def __init__(self, stations):
+        super().__init__(timeout=None)
+        self.add_item(RadioSelect(stations))
+
+@bot.hybrid_command(name='stacje', description='(Alias do /radio) Otwiera menu wyboru stacji radiowej')
+async def stacje(ctx):
+    await radio(ctx)
+
+@bot.hybrid_command(name='radio', description='Otwiera wygodne menu wyboru stacji radiowej')
+async def radio(ctx):
     stations = load_stations()
-    station_url = None
-    for name, url in stations.items():
-        if name.lower() == station_name.lower():
-            station_url = url
-            break
-            
-    if not station_url:
-        await ctx.send(f'Nie znaleziono stacji: **{station_name}**. Wpisz `/stacje` aby zobaczyć listę.')
-        return
-
-    if ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-
-    source = discord.FFmpegPCMAudio(station_url, **ffmpeg_options)
-    ctx.voice_client.play(source, after=lambda e: print(f'Błąd odtwarzania: {e}') if e else None)
-    await ctx.send(f'📻 Odtwarzam radio: **{station_name}**')
+    view = RadioView(stations)
+    await ctx.send("Wybierz interaktywną stację poniżej:", view=view)
 
 @bot.hybrid_command(name='stop', description='Zatrzymuje bota i rozłącza z kanału')
 async def stop(ctx):
