@@ -1,0 +1,39 @@
+# =============================================================================
+# Bot Muzyczny Discord — Konfiguracja
+# =============================================================================
+# Wszystkie ustawienia w jednym pliku. Linie zaczynające się od # to komentarze.
+# Po zmianach zrestartuj bota.
+# Token bota ustaw w pliku .env (DISCORD_TOKEN).
+# =============================================================================
+
+[bot]
+# Poziom logowania: DEBUG, INFO, WARNING, ERROR
+log_level = "INFO"
+
+[voice]
+# Domyślna głośność bota (0-200, 100 = oryginalna głośność)
+default_volume = 5
+
+# Czas w sekundach, po którym bot opuści kanał głosowy gdy kolejka jest pusta
+# Ustaw 0 aby bot nigdy nie opuszczał kanału automatycznie
+auto_leave_seconds = 300
+
+[youtube]
+# Ścieżka do pliku cookies.txt — wymagana gdy bot działa na VPS/datacenter
+# YouTube blokuje zapytania z serwerów, cookies omijają to ograniczenie
+# Jak wyeksportować: rozszerzenie "Get cookies.txt LOCALLY" → YouTube → eksport
+# cookies_path = "data/cookies.txt"
+
+# Maksymalna dozwolona długość utworu w sekundach (7200 = 2 godziny)
+max_duration = 7200
+
+[radio]
+# URL API z listą stacji radiowych
+api_url = "https://api.radyjko.mordorek.dev/stations"
+
+# Limit czasu zapytań do API radiowego w sekundach
+api_timeout = 10
+
+[data]
+# Folder na pliki danych (kolejka, ulubione, historia)
+folder = "data"

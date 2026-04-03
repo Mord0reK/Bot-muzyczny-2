@@ -1,10 +1,10 @@
 services:
   bot:
-    build: .
-    container_name: discord_music_bot
+    image: ghcr.io/igorstarega/bot-muzyczny-2:latest
+    container_name: discord-bot
     restart: unless-stopped
-    network_mode: "host"
     env_file:
       - .env
     volumes:
-      - .:/app
+      - ./config:/app/config:rw
+      - ./data:/app/data:rw
