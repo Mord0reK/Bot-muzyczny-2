@@ -35,8 +35,8 @@ if os.path.exists(cookies_path):
 else:
     logging.warning("Nie znaleziono pliku cookies.txt w " + cookies_path + ". yt-dlp może mieć problemy z YouTube.")
 
-# Automatyczna próba wejścia przez klienta web (często to omija bloka robota!)
-ytdl_format_options['extractor_args'] = {'youtube': {'player_client': ['web_creator']}}
+# Automatyczna próba wejścia przez nowszych klientów mobilnych do obejścia weryfikacji formatów
+ytdl_format_options['extractor_args'] = {'youtube': {'player_client': ['android', 'ios']}}
 
 ffmpeg_options = {
     'options': '-vn',
@@ -76,6 +76,7 @@ class MusicPlayer:
 
         self.current = None
         self.volume = 0.5
+        self.loop_mode = "off" # off, single, queue
 
         self.bot.loop.create_task(self.player_loop())
 
@@ -101,6 +102,30 @@ class MusicPlayer:
                 await self._channel.send(f'🎶 Teraz gram: **{source.title}**')
             
             await self.next.wait()
+
+            if self.loop_mode != "off" and isinstance(source, YTDLSource):
+                # Odtwarzanie w pętli wymaga nowej instancji strumienia.
+                # Do zdobycia linku źródłowego użyjemy webpage_url.
+                webpage_url = source.data.get('webpage_url')
+                if webpage_url:
+                    try:
+                        new_source = await YTDLSource.from_url(webpage_url, loop=self.bot.loop, stream=True)
+                        new_source.volume = self.volume
+                        
+                        if self.loop_mode == "single":
+                            # Wpychamy na przód, ale asyncio.Queue nie ma .insert(0).
+                            # Zróbmy to poprzez odłożenie obecnych itemów na tymczasową listę
+                            items = list(self.queue._queue)
+                            self.queue._queue.clear()
+                            self.queue.put_nowait(new_source)
+                            for item in items:
+                                self.queue.put_nowait(item)
+                        elif self.loop_mode == "queue":
+                            # Wpychamy na koniec
+                            await self.queue.put(new_source)
+                    except Exception:
+                        pass # Pomijamy błędy przy tworzeniu pętli
+
             self.current = None
 
     def destroy(self, guild):
@@ -235,6 +260,7 @@ class GeneralCommands(commands.Cog):
     async def stop(self, ctx: commands.Context):
         player = self.get_player(ctx)
         player.queue._queue.clear()
+        player.loop_mode = "off"
 
         if ctx.voice_client:
             ctx.voice_client.stop()
@@ -249,6 +275,58 @@ class GeneralCommands(commands.Cog):
             await ctx.send("👋 Wyszedłem z kanału.")
         else:
             await ctx.send("Bot nie jest na kanale.")
+
+    @commands.hybrid_command(name="loop", description="Przełącza tryb powtarzania (off, single, queue).")
+    @app_commands.choices(tryb=[
+        app_commands.Choice(name="Wyłącz (Off)", value="off"),
+        app_commands.Choice(name="Pojedynczy utwór (Single)", value="single"),
+        app_commands.Choice(name="Cała kolejka (Queue)", value="queue")
+    ])
+    async def loop(self, ctx: commands.Context, tryb: str):
+        player = self.get_player(ctx)
+        dostepne = {"off": "Wyłączony", "single": "Zapętlenie utworu", "queue": "Zapętlenie kolejki"}
+        if tryb not in dostepne:
+            return await ctx.send("Zły tryb. Wybierz `off`, `single` lub `queue`.")
+
+        player.loop_mode = tryb
+        await ctx.send(f"🔁 Tryb powtarzania ustawiony na: **{dostepne[tryb]}**")
+
+    @commands.hybrid_command(name="shuffle", description="Miesza obecną kolejkę utworów.")
+    async def shuffle(self, ctx: commands.Context):
+        import random
+        player = self.get_player(ctx)
+        if player.queue.qsize() < 2:
+            return await ctx.send("Za mała ilość utworów do modyfikacji (potrzeba min. 2 w kolejce).")
+
+        l = list(player.queue._queue)
+        random.shuffle(l)
+        player.queue._queue.clear()
+        for item in l:
+            player.queue.put_nowait(item)
+
+        await ctx.send("🔀 Przetasowano kolejkę!")
+
+    @commands.hybrid_command(name="remove", description="Usuwa wybrany utwór z danej pozycji kolejki.")
+    async def remove(self, ctx: commands.Context, pozycja: int):
+        player = self.get_player(ctx)
+        
+        if pozycja < 1 or pozycja > player.queue.qsize():
+            return await ctx.send(f"Błędna pozycja. Podaj liczbę od 1 do {player.queue.qsize()}.")
+
+        l = list(player.queue._queue)
+        usuniete = l.pop(pozycja - 1)
+
+        player.queue._queue.clear()
+        for item in l:
+            player.queue.put_nowait(item)
+            
+        await ctx.send(f"🗑️ Usunięto z kolejki: **{getattr(usuniete, 'title', 'Nieznany')}**")
+
+    @commands.hybrid_command(name="clear", description="Czyści całą obecną kolejkę.")
+    async def clear(self, ctx: commands.Context):
+        player = self.get_player(ctx)
+        player.queue._queue.clear()
+        await ctx.send("🔥 Kolejka została wyczyszczona!")
 
     @commands.hybrid_command(name="radio", description="Odtwarza wybraną stację radiową.")
     @app_commands.choices(stacja=[

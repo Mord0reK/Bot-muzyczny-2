@@ -8,3 +8,4 @@ services:
     volumes:
       - ./config:/app/config:rw
       - ./data:/app/data:rw
+      - ./cookies.txt:/app/cookies.txt:rw
