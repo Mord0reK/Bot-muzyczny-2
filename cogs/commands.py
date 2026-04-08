@@ -23,6 +23,10 @@ ytdl_format_options = {
     'source_address': '0.0.0.0', 
 }
 
+import os
+if os.path.exists("cookies.txt"):
+    ytdl_format_options['cookiefile'] = 'cookies.txt'
+
 ffmpeg_options = {
     'options': '-vn',
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
