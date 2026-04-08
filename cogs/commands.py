@@ -56,8 +56,11 @@ class GeneralCommands(commands.Cog):
     
     @commands.hybrid_command(name="play", description="Odtwarza muzykę z YouTube.")
     async def play(self, ctx: commands.Context, *, link_lub_nazwa: str):
-        if not ctx.author.voice:
-            await ctx.send("Musisz być na kanale głosowym!")
+        # Aby zapobiec błędowi "Aplikacja nie reaguje", odraczamy odpowiedź (bot ma wtedy do 15 min na przetworzenie)
+        await ctx.defer()
+
+        if getattr(ctx.author, "voice", None) is None:
+            await ctx.send("Musisz być na kanale głosowym na serwerze!")
             return
 
         channel = ctx.author.voice.channel
@@ -125,8 +128,11 @@ class GeneralCommands(commands.Cog):
         app_commands.Choice(name="RMF MAXX", value="http://217.74.72.11/rmf_maxxx")
     ])
     async def radio(self, ctx: commands.Context, stacja: str):
-        if not ctx.author.voice:
-            await ctx.send("Musisz być na kanale głosowym!")
+        # Aplikujemy identyczne odroczenie odpowiedzi
+        await ctx.defer()
+
+        if getattr(ctx.author, "voice", None) is None:
+            await ctx.send("Musisz być na kanale głosowym na serwerze!")
             return
 
         channel = ctx.author.voice.channel
