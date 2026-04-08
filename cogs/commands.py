@@ -24,8 +24,19 @@ ytdl_format_options = {
 }
 
 import os
-if os.path.exists("cookies.txt"):
-    ytdl_format_options['cookiefile'] = 'cookies.txt'
+import logging
+import asyncio
+
+cookies_path = os.path.join(os.getcwd(), "cookies.txt")
+if os.path.exists(cookies_path):
+    ytdl_format_options['cookiefile'] = cookies_path
+    ytdl_format_options['legacyserver'] = True
+    logging.info("Znaleziono plik cookies.txt! yt-dlp użyje go do autoryzacji.")
+else:
+    logging.warning("Nie znaleziono pliku cookies.txt w " + cookies_path + ". yt-dlp może mieć problemy z YouTube.")
+
+# Automatyczna próba wejścia przez klienta web (często to omija bloka robota!)
+ytdl_format_options['extractor_args'] = {'youtube': {'player_client': ['web_creator']}}
 
 ffmpeg_options = {
     'options': '-vn',
@@ -52,9 +63,72 @@ class YTDLSource(discord.PCMVolumeTransformer):
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
+class MusicPlayer:
+    """Klasa reprezentująca odtwarzacz muzyczny na danym serwerze z obsługą kolejkowania."""
+    def __init__(self, ctx):
+        self.bot = ctx.bot
+        self._guild = ctx.guild
+        self._channel = ctx.channel
+        self._cog = ctx.cog
+
+        self.queue = asyncio.Queue()
+        self.next = asyncio.Event()
+
+        self.current = None
+        self.volume = 0.5
+
+        self.bot.loop.create_task(self.player_loop())
+
+    async def player_loop(self):
+        await self.bot.wait_until_ready()
+        while not self.bot.is_closed():
+            self.next.clear()
+
+            try:
+                # Oczekiwanie na kolejny utwór maksymalnie 5 minut.
+                source = await asyncio.wait_for(self.queue.get(), timeout=300)
+            except asyncio.TimeoutError:
+                return self.destroy(self._guild)
+
+            self.current = source
+            
+            if not self._guild.voice_client:
+                continue
+
+            self._guild.voice_client.play(source, after=lambda _: self.bot.loop.call_soon_threadsafe(self.next.set))
+            
+            if hasattr(source, 'title'):
+                await self._channel.send(f'🎶 Teraz gram: **{source.title}**')
+            
+            await self.next.wait()
+            self.current = None
+
+    def destroy(self, guild):
+        return self.bot.loop.create_task(self._cog.cleanup(guild))
+
 class GeneralCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.players = {}
+
+    def get_player(self, ctx):
+        try:
+            player = self.players[ctx.guild.id]
+        except KeyError:
+            player = MusicPlayer(ctx)
+            self.players[ctx.guild.id] = player
+        return player
+
+    async def cleanup(self, guild):
+        try:
+            await guild.voice_client.disconnect()
+        except AttributeError:
+            pass
+
+        try:
+            del self.players[guild.id]
+        except KeyError:
+            pass
 
     # --- KOMENDY MUZYCZNE ---
     
@@ -73,14 +147,65 @@ class GeneralCommands(commands.Cog):
         elif ctx.voice_client.channel != channel:
             await ctx.voice_client.move_to(channel)
 
-        vc = ctx.voice_client
-        async with ctx.typing():
-            try:
-                player = await YTDLSource.from_url(link_lub_nazwa, loop=self.bot.loop, stream=True)
-                vc.play(player)
-                await ctx.send(f'Teraz gram: **{player.title}**')
-            except Exception as e:
-                await ctx.send(f"Wystąpił błąd podczas odtwarzania: {e}")
+        player = self.get_player(ctx)
+
+        try:
+            source = await YTDLSource.from_url(link_lub_nazwa, loop=self.bot.loop, stream=True)
+            source.volume = player.volume
+        except Exception as e:
+            return await ctx.send(f"Wystąpił błąd podczas wyszukiwania: {e}")
+
+        await player.queue.put(source)
+        await ctx.send(f'✅ Dodano do kolejki: **{source.title}**')
+
+    @commands.hybrid_command(name="queue", description="Wyświetla aktualną kolejkę utworów.")
+    async def queue(self, ctx: commands.Context):
+        player = self.get_player(ctx)
+        if player.queue.empty():
+            return await ctx.send("Kolejka jest obecnie pusta.")
+
+        upcoming = list(player.queue._queue)
+        msg = f"**Teraz gram:** {player.current.title if player.current else 'Nic'}\n\n**W kolejce:**\n"
+        for i, track in enumerate(upcoming[:10], start=1):
+            title = getattr(track, 'title', 'Nieznany tytuł')
+            msg += f"`{i}.` {title}\n"
+        
+        if len(upcoming) > 10:
+            msg += f"\n*...i {len(upcoming) - 10} więcej*"
+
+        embed = discord.Embed(title="Kolejka utworów", description=msg, color=discord.Color.blue())
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="nowplaying", description="Pokazuje aktualnie odtwarzany utwór.")
+    async def nowplaying(self, ctx: commands.Context):
+        player = self.get_player(ctx)
+        if not player.current:
+            return await ctx.send("Obecnie nic nie gram.")
+            
+        title = getattr(player.current, 'title', 'Nieznane')
+        url = getattr(player.current, 'url', '')
+        embed = discord.Embed(title="Teraz gram", description=f"**[{title}]({url})**", color=discord.Color.green())
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="volume", description="Zmienia głośność bota (1 - 100).")
+    async def volume(self, ctx: commands.Context, vol: int):
+        if not ctx.voice_client:
+            return await ctx.send("Bot nie jest połączony z kanałem głosowym.")
+        
+        if getattr(ctx.author, "voice", None) is None:
+            return await ctx.send("Musisz być na kanale!")
+
+        if not (1 <= vol <= 100):
+            return await ctx.send("Podaj wartość od 1 do 100.")
+
+        player = self.get_player(ctx)
+        calculated_vol = vol / 100.0
+        
+        if ctx.voice_client.source:
+            ctx.voice_client.source.volume = calculated_vol
+            
+        player.volume = calculated_vol
+        await ctx.send(f"🔊 Głośność zmieniona na **{vol}%**")
 
     @commands.hybrid_command(name="pause", description="Pauzuje muzykę.")
     async def pause(self, ctx: commands.Context):
@@ -108,17 +233,20 @@ class GeneralCommands(commands.Cog):
 
     @commands.hybrid_command(name="stop", description="Zatrzymuje muzykę i czyści odtwarzacz.")
     async def stop(self, ctx: commands.Context):
+        player = self.get_player(ctx)
+        player.queue._queue.clear()
+
         if ctx.voice_client:
             ctx.voice_client.stop()
-            await ctx.send("Zatrzymano odtwarzanie.")
+            await ctx.send("⏹️ Zatrzymano odtwarzanie i wyczyszczono kolejkę.")
         else:
             await ctx.send("Bot nie działa na głosie.")
 
     @commands.hybrid_command(name="leave", description="Odłącza bota od kanału głosowego.")
     async def leave(self, ctx: commands.Context):
         if ctx.voice_client:
-            await ctx.voice_client.disconnect()
-            await ctx.send("Wyszedłem z kanału.")
+            await self.cleanup(ctx.guild)
+            await ctx.send("👋 Wyszedłem z kanału.")
         else:
             await ctx.send("Bot nie jest na kanale.")
 
@@ -145,10 +273,12 @@ class GeneralCommands(commands.Cog):
         elif ctx.voice_client.channel != channel:
             await ctx.voice_client.move_to(channel)
 
-        vc = ctx.voice_client
+        player = self.get_player(ctx)
 
-        if vc.is_playing():
-            vc.stop()
+        if ctx.voice_client.is_playing():
+            ctx.voice_client.stop()
+
+        player.queue._queue.clear()
 
         # Znalezienie nazwy stacji dla lepszego komunikatu
         stacje_map = {
@@ -161,16 +291,17 @@ class GeneralCommands(commands.Cog):
         }
         stacja_nazwa = stacje_map.get(stacja, "Stacja Radiowa")
 
-        async with ctx.typing():
-            try:
-                # W przypadku streamów radiowych możemy bezpośrednio użyć FFmpegPCMAudio
-                player = discord.FFmpegPCMAudio(stacja, **ffmpeg_options)
-                # Ponieważ radio streams używają często samego dźwięku, potrzebujemy transformera tylko dla głośności
-                volume_player = discord.PCMVolumeTransformer(player, volume=0.5)
-                vc.play(volume_player)
-                await ctx.send(f'🎧 Zaczynam odtwarzać radio: **{stacja_nazwa}**')
-            except Exception as e:
-                await ctx.send(f"Wystąpił błąd podczas odtwarzania radia: {e}")
+        try:
+            # W przypadku streamów radiowych możemy bezpośrednio użyć FFmpegPCMAudio
+            player_source = discord.FFmpegPCMAudio(stacja, **ffmpeg_options)
+            # Ponieważ radio streams używają często samego dźwięku, potrzebujemy transformera tylko dla głośności
+            volume_player = discord.PCMVolumeTransformer(player_source, volume=player.volume)
+            setattr(volume_player, 'title', stacja_nazwa)
+            await player.queue.put(volume_player)
+            
+            await ctx.send(f'🎧 Zaczynam odtwarzać radio: **{stacja_nazwa}**')
+        except Exception as e:
+            await ctx.send(f"Wystąpił błąd podczas odtwarzania radia: {e}")
 
     # --- KOMENDY NARZĘDZIOWE ---
 
