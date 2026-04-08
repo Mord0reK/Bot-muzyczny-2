@@ -32,36 +32,6 @@ async def on_ready():
     except Exception as e:
         logging.error(f"Błąd synchronizacji komend: {e}")
 
-
-@bot.tree.command(name="test", description="Testuje bota — ping do google.com")
-async def test(interaction: discord.Interaction):
-    await interaction.response.defer()
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            start = time.perf_counter()
-            async with session.get(
-                "https://www.google.com",
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                await resp.read()
-            end = time.perf_counter()
-            ping_ms = round((end - start) * 1000)
-    except Exception as e:
-        await interaction.followup.send(f"Błąd pingowania google.com: {e}")
-        return
-
-    discord_ping = round(bot.latency * 1000) if bot.latency >= 0 else "N/A"
-
-    embed = discord.Embed(
-        title="Test bota",
-        color=discord.Color.green(),
-    )
-    embed.add_field(name="Ping do google.com", value=f"{ping_ms} ms", inline=True)
-    embed.add_field(name="Ping Discord", value=f"{discord_ping} ms", inline=True)
-    await interaction.followup.send(embed=embed)
-
-
 async def load_cogs():
     cogs_folder = "cogs"
     for folder in os.listdir(cogs_folder):
@@ -76,6 +46,7 @@ async def load_cogs():
                     except Exception as e:
                         logging.error(f"Błąd ładowania cog {cog_path}: {e}")
 
+bot.setup_hook = load_cogs
 
 def main():
     token = os.getenv("DISCORD_TOKEN")
@@ -83,7 +54,6 @@ def main():
         logging.error("Ustaw DISCORD_TOKEN w pliku .env")
         return
 
-    asyncio.run(load_cogs())
     bot.run(token)
 
 
