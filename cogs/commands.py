@@ -115,6 +115,49 @@ class GeneralCommands(commands.Cog):
         else:
             await ctx.send("Bot nie jest na kanale.")
 
+    @commands.hybrid_command(name="radio", description="Odtwarza wybraną stację radiową.")
+    @app_commands.choices(stacja=[
+        app_commands.Choice(name="RMF FM", value="http://217.74.72.11/rmf_fm"),
+        app_commands.Choice(name="Radio ZET", value="http://n-14-5.dcs.redcdn.pl/sc/o2/Eurozet/live/audio.livx"),
+        app_commands.Choice(name="Eska", value="https://radio.streemlion.com:1500/eska"),
+        app_commands.Choice(name="TOK FM", value="https://pl2.mml.com.pl:8001/tokfm"),
+        app_commands.Choice(name="Antyradio", value="http://n-14-5.dcs.redcdn.pl/sc/o2/Eurozet/live/antyradio.livx"),
+        app_commands.Choice(name="RMF MAXX", value="http://217.74.72.11/rmf_maxxx")
+    ])
+    async def radio(self, ctx: commands.Context, stacja: str):
+        if not ctx.author.voice:
+            await ctx.send("Musisz być na kanale głosowym!")
+            return
+
+        channel = ctx.author.voice.channel
+        if not ctx.voice_client:
+            await channel.connect()
+        elif ctx.voice_client.channel != channel:
+            await ctx.voice_client.move_to(channel)
+
+        vc = ctx.voice_client
+
+        if vc.is_playing():
+            vc.stop()
+
+        # Znalezienie nazwy stacji dla lepszego komunikatu
+        stacja_nazwa = "Stacja Radiowa"
+        for choice in self.radio.app_command.choices:
+            if choice.value == stacja:
+                stacja_nazwa = choice.name
+                break
+
+        async with ctx.typing():
+            try:
+                # W przypadku streamów radiowych możemy bezpośrednio użyć FFmpegPCMAudio
+                player = discord.FFmpegPCMAudio(stacja, **ffmpeg_options)
+                # Ponieważ radio streams używają często samego dźwięku, potrzebujemy transformera tylko dla głośności
+                volume_player = discord.PCMVolumeTransformer(player, volume=0.5)
+                vc.play(volume_player)
+                await ctx.send(f'🎧 Zaczynam odtwarzać radio: **{stacja_nazwa}**')
+            except Exception as e:
+                await ctx.send(f"Wystąpił błąd podczas odtwarzania radia: {e}")
+
     # --- KOMENDY NARZĘDZIOWE ---
 
     @commands.hybrid_command(name="test", description="Testuje bota (ping).")

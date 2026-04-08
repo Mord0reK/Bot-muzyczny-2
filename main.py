@@ -34,6 +34,18 @@ async def on_ready():
 
 async def load_cogs():
     cogs_folder = "cogs"
+    
+    # Ładowanie z głównego folderu cogs
+    for file in os.listdir(cogs_folder):
+        if file.endswith(".py") and not file.startswith("_"):
+            cog_path = f"{cogs_folder}.{file[:-3]}"
+            try:
+                await bot.load_extension(cog_path)
+                logging.info(f"Załadowano cog: {cog_path}")
+            except Exception as e:
+                logging.error(f"Błąd ładowania cog {cog_path}: {e}")
+
+    # Ładowanie z podfolderów (jeśli jakieś jeszcze zostały)
     for folder in os.listdir(cogs_folder):
         folder_path = os.path.join(cogs_folder, folder)
         if os.path.isdir(folder_path):
@@ -42,7 +54,7 @@ async def load_cogs():
                     cog_path = f"{cogs_folder}.{folder}.{file[:-3]}"
                     try:
                         await bot.load_extension(cog_path)
-                        logging.info(f"Załadowano cog: {cog_path}")
+                        logging.info(f"Załadowano cog z podfolderu: {cog_path}")
                     except Exception as e:
                         logging.error(f"Błąd ładowania cog {cog_path}: {e}")
 
