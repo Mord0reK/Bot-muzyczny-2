@@ -147,11 +147,15 @@ class GeneralCommands(commands.Cog):
             vc.stop()
 
         # Znalezienie nazwy stacji dla lepszego komunikatu
-        stacja_nazwa = "Stacja Radiowa"
-        for choice in self.radio.app_command.choices:
-            if choice.value == stacja:
-                stacja_nazwa = choice.name
-                break
+        stacje_map = {
+            "http://217.74.72.11/rmf_fm": "RMF FM",
+            "http://n-14-5.dcs.redcdn.pl/sc/o2/Eurozet/live/audio.livx": "Radio ZET",
+            "https://radio.streemlion.com:1500/eska": "Eska",
+            "https://pl2.mml.com.pl:8001/tokfm": "TOK FM",
+            "http://n-14-5.dcs.redcdn.pl/sc/o2/Eurozet/live/antyradio.livx": "Antyradio",
+            "http://217.74.72.11/rmf_maxxx": "RMF MAXX"
+        }
+        stacja_nazwa = stacje_map.get(stacja, "Stacja Radiowa")
 
         async with ctx.typing():
             try:
@@ -183,6 +187,58 @@ class GeneralCommands(commands.Cog):
         embed = discord.Embed(title="Status Bota", color=discord.Color.green())
         embed.add_field(name="Ping HTTP", value=f"{ping_ms} ms")
         embed.add_field(name="Ping Discord", value=f"{discord_ping} ms")
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="testall", description="Wykonuje pełną diagnostykę i testuje wszystkie zewnętrzne usługi bota.")
+    async def testall(self, ctx: commands.Context):
+        await ctx.defer()
+        
+        embed = discord.Embed(title="⚙️ Diagnostyka Systemów Bota", color=discord.Color.blurple())
+        messages = []
+
+        # 1. API i Sieć
+        discord_ping = round(self.bot.latency * 1000)
+        messages.append(f"✅ **Discord API:** Połączono ({discord_ping} ms)")
+
+        # 2. Config
+        try:
+            _ = load_config()
+            messages.append("✅ **Konfiguracja (TOML):** Zapis i odczyt działa")
+        except Exception as e:
+            messages.append(f"❌ **Konfiguracja:** Błąd ({e})")
+
+        # 3. Yt-dlp
+        try:
+            data = await self.bot.loop.run_in_executor(None, lambda: ytdl.extract_info("ytsearch1:test sound", download=False))
+            if 'entries' in data and len(data['entries']) > 0:
+                messages.append("✅ **YT-DLP (YouTube):** Wyszukiwanie działa")
+            else:
+                messages.append("❌ **YT-DLP:** Brak wyników wyszukiwania")
+        except Exception as e:
+            messages.append(f"❌ **YT-DLP:** Błąd wyszukiwania ({e})")
+
+        # 4. Sprawdzanie FFmpeg (wymagany do odtwarzania muzyki i radia)
+        import subprocess
+        try:
+            process = subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if process.returncode == 0:
+                messages.append("✅ **FFmpeg (Audio):** Zainstalowany i gotowy do strumieniania")
+            else:
+                messages.append("❌ **FFmpeg:** Zainstalowany nieprawidłowo")
+        except FileNotFoundError:
+            messages.append("❌ **FFmpeg:** Nie znaleziono! Muzyka (play/radio) nie będzie działać.")
+
+        # 5. Głos i uprawnienia
+        if getattr(ctx.author, "voice", None) and ctx.author.voice.channel:
+            perms = ctx.author.voice.channel.permissions_for(ctx.guild.me)
+            if perms.connect and perms.speak:
+                messages.append("✅ **Uprawnienia Kanału:** Mam dostęp do łączenia i mówienia")
+            else:
+                messages.append("❌ **Uprawnienia Kanału:** Brak puszczenia głosu lub mówienia (Connect/Speak)")
+        else:
+            messages.append("⚠️ **Uprawnienia Kanału:** (Wejdź na kanał głosowy, by to sprawdzić)")
+
+        embed.description = "\n".join(messages)
         await ctx.send(embed=embed)
 
 
